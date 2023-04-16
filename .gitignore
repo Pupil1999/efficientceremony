@@ -1,3 +1,4 @@
 /target
 /src/examples.rs
 /.vscode
+/.gitignore
