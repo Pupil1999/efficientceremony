@@ -35,7 +35,7 @@ impl ConstraintSystem {
 
         let gate_polys = vec![1; n - 1];
 
-        for _i in 0..m + 1 {
+        for _i in 0..m - l {
             u.push(Univariate::create_from_u64(&gate_polys));
             v.push(Univariate::create_from_u64(&gate_polys));
             w.push(Univariate::create_from_u64(&gate_polys));
@@ -44,9 +44,12 @@ impl ConstraintSystem {
         let vanishing_poly = vec![1; n];
         let t = Univariate::create_from_u64(&vanishing_poly);
 
+        // Universal part of the CRS will be padding to be exponential size
+        let actual_n = 2_usize.pow(ark_std::log2(n));
+
         Self {
             m,
-            n,
+            n: actual_n,
             l,
             u,
             v,
