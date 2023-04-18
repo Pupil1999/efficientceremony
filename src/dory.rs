@@ -1,7 +1,7 @@
 use crate::ConstraintSystem;
-use std::io::Write;
 use ark_ff::UniformRand;
 use ark_std;
+use ark_std::io::Cursor;
 use ark_ff::{Field, BigInteger256};
 use ark_ec::{pairing::{Pairing, PairingOutput}, bls12::Bls12, CurveGroup};
 use ark_bls12_381::{Bls12_381, Config, G1Affine, G2Affine, Fr, G1Projective as G1, G2Projective as G2};
@@ -39,7 +39,6 @@ impl DoryProof {
         let mut D = Vec::<(Gt, Gt, Gt, Gt)>::new();
         let mut C = Vec::<(Gt, Gt)>::new();
 
-        let mut rng = ark_std::test_rng();
         let mut v1 = w1.clone();
         let mut v2 = w2.clone();
         let mut C_ = statement.x.0;
@@ -53,7 +52,7 @@ impl DoryProof {
             let d_2_right = Bls12_381::multi_pairing(&setup.combases.0[0..half], &v2[half..2*half]);
             D.push((d_1_left, d_1_right, d_2_left, d_2_right));
 
-            let beta = Fr::rand(&mut rng);
+            let beta: Fr = DoryOracle::fromGts(&[d_1_left, d_1_right, d_2_left, d_2_right]);
             let beta_inv = beta.inverse().unwrap();
             
             for k in 0..half * 2 {
@@ -65,7 +64,7 @@ impl DoryProof {
 
             C.push((c_positive, c_negative));
 
-            let alpha = Fr::rand(&mut rng);
+            let alpha: Fr = DoryOracle::fromGts(&[c_positive, c_negative]);
             let alpha_inv = alpha.inverse().unwrap();
             for k in 0..half {
                 v1[k] = (v1[k] * alpha + v1[k + half]).into();
@@ -75,10 +74,10 @@ impl DoryProof {
             C_ = C_ + setup.xs[j] + D_2*beta + D_1*beta_inv + c_positive*alpha + c_negative*alpha_inv;
             D_1 = d_1_left*alpha + d_1_right + setup.precoms[j].0*alpha*beta + setup.precoms[j].1*beta;
             D_2 = d_2_left*alpha_inv + d_2_right + setup.precoms[j].2*alpha_inv*beta_inv + setup.precoms[j].3*beta_inv;
-            //assert_eq!(Bls12_381::multi_pairing(&v1[0..half], &v2[0..half]), C_);
-            //assert_eq!(Bls12_381::multi_pairing(&v1[0..half], &setup.combases.1[0..half]), D_1);
-            //assert_eq!(Bls12_381::multi_pairing(&setup.combases.0[0..half], &v2[0..half]), D_2);
-            // if j == m - 1{
+            // assert_eq!(Bls12_381::multi_pairing(&v1[0..half], &v2[0..half]), C_);
+            // assert_eq!(Bls12_381::multi_pairing(&v1[0..half], &setup.combases.1[0..half]), D_1);
+            // assert_eq!(Bls12_381::multi_pairing(&setup.combases.0[0..half], &v2[0..half]), D_2);
+            //if j == m - 1{
             //     let d = Fr::rand(&mut rng);
             //     let left_out = Bls12_381::pairing(&v1[0] + setup.combases.0[0] * d, &v2[0] + setup.combases.1[0] * d.inverse().unwrap());
             //     let right_out = setup.xs[setup.m] + C_ + D_2 * d + D_1 * d.inverse().unwrap();
@@ -142,27 +141,21 @@ impl DoryPrecomputation {
 pub struct DoryOracle;
 #[allow(non_snake_case)]
 impl DoryOracle {
-    pub fn fromGts(gt: &Vec<Gt>) -> Fr {
-        //let mut str: String = Default::default();
-        // for i in gt {
-        //     str += &i.to_string();
-        // }
+    pub fn fromGts(gt: &[Gt]) -> Fr {
+        let mut buffers = Vec::new();
+        for elm in gt {
+            let mut buffer = Vec::new();
+            elm.serialize_compressed(&mut buffer).unwrap();
+            buffers.push(buffer);
+        }
+        let content = buffers.concat();
 
-        // let content = str.as_bytes();
-        // let mut hasher = Sha256::new();
-        // hasher.update(content);
+        let mut hasher = Sha256::new();
+        hasher.update(&content);
         
-        // let u8array: [u8; 64] = hasher.finalize().as_slice().try_into().unwrap();
-
-        // let buffer = u8array.into();
-        // let b = BigInteger256::new(buffer);
-
-        
-        // let mut hasher = Sha256::new();
-        // let mut buffer = Vec::new();
-        // let mut bts: &[u8] = gt[0].serialize_compressed(&mut buffer).unwrap().into();
-        // hasher.update(& bts);
-
-        Fr::from(10)
+        let mut u8array: [u8; 32] = hasher.finalize().as_slice().try_into().unwrap();
+        u8array[31] = 0;
+        let rn: Fr = Fr::deserialize_compressed(&u8array[..]).unwrap();
+        rn
     }
 }
