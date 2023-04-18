@@ -1,12 +1,12 @@
 use crate::ConstraintSystem;
-use ark_ff::UniformRand;
-use ark_std;
-use ark_std::io::Cursor;
-use ark_ff::{Field, BigInteger256};
+use ark_ff::{UniformRand, Zero};
+use ark_std::{self, One};
+use ark_ff::Field;
 use ark_ec::{pairing::{Pairing, PairingOutput}, bls12::Bls12, CurveGroup};
 use ark_bls12_381::{Bls12_381, Config, G1Affine, G2Affine, Fr, G1Projective as G1, G2Projective as G2};
 use sha2::{Sha256, Digest};
 use ark_serialize::{CanonicalSerialize, CanonicalDeserialize};
+use ark_ec::VariableBaseMSM;
 
 type Gt = PairingOutput<Bls12<Config>>;
 
@@ -71,26 +71,50 @@ impl DoryProof {
                 v2[k] = (v2[k] * alpha_inv + v2[k + half]).into();
             }
 
-            C_ = C_ + setup.xs[j] + D_2*beta + D_1*beta_inv + c_positive*alpha + c_negative*alpha_inv;
-            D_1 = d_1_left*alpha + d_1_right + setup.precoms[j].0*alpha*beta + setup.precoms[j].1*beta;
-            D_2 = d_2_left*alpha_inv + d_2_right + setup.precoms[j].2*alpha_inv*beta_inv + setup.precoms[j].3*beta_inv;
-            // assert_eq!(Bls12_381::multi_pairing(&v1[0..half], &v2[0..half]), C_);
-            // assert_eq!(Bls12_381::multi_pairing(&v1[0..half], &setup.combases.1[0..half]), D_1);
-            // assert_eq!(Bls12_381::multi_pairing(&setup.combases.0[0..half], &v2[0..half]), D_2);
-            //if j == m - 1{
-            //     let d = Fr::rand(&mut rng);
-            //     let left_out = Bls12_381::pairing(&v1[0] + setup.combases.0[0] * d, &v2[0] + setup.combases.1[0] * d.inverse().unwrap());
-            //     let right_out = setup.xs[setup.m] + C_ + D_2 * d + D_1 * d.inverse().unwrap();
-            //     assert_eq!(left_out, right_out);
-            // }
+            C_ += Gt::msm(&[setup.xs[j], D_2, D_1, c_positive, c_negative], &[Fr::one(), beta, beta_inv, alpha, alpha_inv]).unwrap();
+            D_1 = Gt::msm(&[d_1_left, d_1_right, setup.precoms[j].0, setup.precoms[j].1], &[alpha, Fr::one(), alpha*beta, beta]).unwrap();
+            D_2 = Gt::msm(&[d_2_left, d_2_right, setup.precoms[j].2, setup.precoms[j].3], &[alpha_inv, Fr::one(), alpha_inv*beta_inv, beta_inv]).unwrap();
         }
     
         Self {D, C, m, E: (v1[0].into_affine(), v2[0].into_affine())}
     }
 
-    pub fn verify(state: &DoryStatement, setup: &DoryPrecomputation, proof: &DoryProof) {
+    pub fn verify(state: &DoryStatement, setup: &DoryPrecomputation, proof: &DoryProof) -> bool{
+        let (C, D_1, D_2) = state.x;
+        let m = setup.m;
+        let mut betas = Vec::<Fr>::with_capacity(m);
+        let mut betas_inv = Vec::<Fr>::with_capacity(m);
+        let mut alphas = Vec::<Fr>::with_capacity(m);
+        let mut alphas_inv = Vec::<Fr>::with_capacity(m);
+        for elm in proof.D.iter() {
+            let beta = DoryOracle::fromGts(&[elm.0, elm.1, elm.2, elm.3]);
+            betas.push(beta);
+            betas_inv.push(beta.inverse().unwrap());
+        }
+        for elm in proof.C.iter() {
+            let alpha = DoryOracle::fromGts(&[elm.0, elm.1]);
+            alphas.push(alpha);
+            alphas_inv.push(alpha.inverse().unwrap());
+        }
+        let mut C_fin = C + setup.sigmax;
+        let mut D_1_fin = D_1;
+        let mut D_2_fin = D_2;
 
+        for i in 0..m {
+            C_fin += Gt::msm(&[D_2_fin, D_1_fin, proof.C[i].0, proof.C[i].1], &[betas[i], betas_inv[i], alphas[i], alphas_inv[i]]).unwrap();
+            D_1_fin = Gt::msm(&[proof.D[i].0, proof.D[i].1, setup.precoms[i].0, setup.precoms[i].1], &[alphas[i], Fr::one(), alphas[i]*betas[i], betas[i]]).unwrap();
+            D_2_fin = Gt::msm(&[proof.D[i].2, proof.D[i].3, setup.precoms[i].2, setup.precoms[i].3], &[alphas_inv[i], Fr::one(), alphas_inv[i]*betas_inv[i], betas_inv[i]]).unwrap();
+        }
+
+        let mut rng = ark_std::test_rng();
+        let d = Fr::rand(&mut rng);
+        let left = Bls12_381::pairing(proof.E.0 + setup.combases.0[0] * d, proof.E.1 + setup.combases.1[0] * d.inverse().unwrap());
+        let right = C_fin + D_2_fin*d + D_1_fin*d.inverse().unwrap();
+
+        left == right
     }
+
+
 }
 
 #[allow(non_snake_case)]
@@ -98,7 +122,8 @@ pub struct DoryPrecomputation {
     pub m: usize,
     pub combases: (Vec<G1>, Vec<G2>),
     pub precoms: Vec<(Gt, Gt, Gt, Gt)>,
-    pub xs: Vec<Gt>
+    pub xs: Vec<Gt>,
+    pub sigmax: Gt
 }
 #[allow(non_snake_case)]
 impl DoryPrecomputation {
@@ -121,9 +146,12 @@ impl DoryPrecomputation {
             Gama_right.push(G2::rand(&mut rng));
         }
         let combases = (Gama_left.clone(), Gama_right.clone());
+        let mut sigmax: Gt = Gt::zero();
         for i in (0..=m).rev() {
             n_iter = 2_usize.pow(i as u32);
-            xs.push(Bls12_381::multi_pairing(&Gama_left[0..n_iter], &Gama_right[0..n_iter]));
+            let bmo = Bls12_381::multi_pairing(&Gama_left[0..n_iter], &Gama_right[0..n_iter]);
+            xs.push(bmo);
+            sigmax += bmo;
         }
         for i in (0..m).rev() {
             let half = 2_usize.pow(i as u32);
@@ -134,7 +162,7 @@ impl DoryPrecomputation {
             precoms.push((delta_1_left, delta_1_right, delta_2_left, delta_2_right));            
         }
 
-        Self {m, combases, precoms, xs}
+        Self {m, combases, precoms, xs, sigmax}
     }
 }
 

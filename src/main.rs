@@ -21,5 +21,6 @@ fn main() {
     let w1 = vec![G; 8];
     let w2 = vec![H; 8];
     let state = DoryStatement::create_state(&precom, &w1, &w2);
-    DoryProof::generate(&w1, &w2, &precom, &state);
+    let proof = DoryProof::generate(&w1, &w2, &precom, &state);
+    println!("{}", DoryProof::verify(&state, &precom, &proof));
 }
