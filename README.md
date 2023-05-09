@@ -1,4 +1,4 @@
-# efficientceremony
+# Efficient Ceremony
 
 This is a course work for holding efficienct ceremony for Groth16.
 Simply do '$cargo run'. It will test the time cost of holding ceremonies of different scales.
