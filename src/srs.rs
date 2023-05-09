@@ -1,8 +1,7 @@
-use std::ops::Mul;
-
 use crate::constraintsystem::ConstraintSystem;
 use ark_ec::Group;
-use ark_std::UniformRand;
+use ark_ff::Field;
+use ark_std::{UniformRand, ops::Mul};
 use ark_bls12_381::{G1Affine, G2Affine, G1Projective as G1, G2Projective as G2, Fr};
 
 pub enum PHASE {
@@ -55,11 +54,11 @@ impl SRS {
             ab_array.push((G, H, G, H));
         }
 
-        for _i in 0..=(n - 2) {
+        for _i in 0..=(n - 1) {
             x_array.push((G, H));
         }
 
-        for _i in 1..=(m - l) {
+        for _i in 0..(m - l) {
             gd_1.push(G);
         }
 
@@ -76,13 +75,24 @@ impl SRS {
         }
     }
 
-    pub fn update(&mut self, phase: PHASE, trapdoors: &Trapdoor){
+    pub fn simple_change_phase(&mut self) {
+        let mut rng = ark_std::test_rng();
+        //Since the computation of this phase is heavy, here provides a simple way for validation.
+        for i in 0..(self.m - self.l) {
+            self.s.2[i] = G1Affine::rand(&mut rng);
+        }
+        for i in 0..(self.n - 2) {
+            self.s.3[i] = G1Affine::rand(&mut rng);
+        }
+    }
+
+    pub fn update(&mut self, phase: &PHASE, trapdoors: &Trapdoor){
         let (m, n, l) = (self.m, self.n, self.l);
         let mut temp: Fr = trapdoors.tau;
 
         match phase {
             PHASE::ONE => {
-                for i in 1..=(2 * n - 2) {
+                for i in 0..=(2 * n - 1) {
                     self.u.0[i].0 = self.u.0[i].0.mul(temp).into();
                     self.u.0[i].1 = self.u.0[i].1.mul(temp).into();
                     temp *= trapdoors.tau;
@@ -96,7 +106,7 @@ impl SRS {
                 self.u.1[0].2 = self.u.1[0].2.mul(&trapdoors.beta).into();
                 self.u.1[0].3 = self.u.1[0].3.mul(&trapdoors.beta).into();
 
-                for i in 1..=n - 1 {
+                for i in 0..=n - 1 {
                     self.u.1[i].0 = self.u.1[i].0.mul(&trapdoors.alpha).into();
                     self.u.1[i].1 = self.u.1[i].1.mul(&trapdoors.alpha).into();
                     self.u.1[i].2 = self.u.1[i].2.mul(&trapdoors.beta).into();
@@ -111,8 +121,17 @@ impl SRS {
             }
 
             PHASE::TWO => {
-                for _i in 0..=(m - l) {
-                    
+                let delta_inv = trapdoors.delta.inverse().unwrap();
+                //Update the two single elements
+                self.s.0 = self.s.0.mul(trapdoors.delta).into();
+                self.s.1 = self.s.1.mul(trapdoors.delta).into();
+                //Update the gate-related arguments
+                for i in 0..(m - l) {
+                    self.s.2[i] = self.s.2[i].mul(delta_inv).into();
+                }
+                //Update the arguments of vanishing polynomial
+                for i in 0..=(n - 2) {
+                    self.s.3[i] = self.s.3[i].mul(delta_inv).into();
                 }
             }
         }

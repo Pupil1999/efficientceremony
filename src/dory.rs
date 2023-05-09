@@ -1,4 +1,3 @@
-use crate::ConstraintSystem;
 use ark_ff::{UniformRand, Zero};
 use ark_std::{self, One};
 use ark_ff::Field;
@@ -17,17 +16,25 @@ pub struct DoryStatement{
 }
 #[allow(non_snake_case)]
 impl DoryStatement {
-    pub fn create_state(precom: &DoryPrecomputation, w1: &Vec<G1>, w2: &Vec<G2>, s1: &Vec<Fr>, s2: &Vec<Fr>) -> Self{
+    pub fn create_state(precom: &DoryPrecomputation, w1: &Vec<G1Affine>, w2: &Vec<G2Affine>, s1: &Vec<Fr>, s2: &Vec<Fr>) -> Self{
         let C = Bls12_381::multi_pairing(w1, w2);
-        let D_1 = Bls12_381::multi_pairing(w1, &precom.combases.1);
-        let D_2 = Bls12_381::multi_pairing(&precom.combases.0, w2);
+        let D_1 = Bls12_381::multi_pairing(w1, &precom.combases.1[0..w1.len()]);
+        let D_2 = Bls12_381::multi_pairing(&precom.combases.0[0..w2.len()], w2);
         let m = precom.m;
         let mut E_1 = G1::zero();
         let mut E_2 = G2::zero();
 
-        for i in 0..2_usize.pow(m as u32) {
-            E_1 += w1[i] * s2[i];
-            E_2 += w2[i] * s1[i];
+        let s = 2_usize.pow(m as u32);
+        if s > s1.len() {
+            for i in 0..s1.len() {
+                E_1 += w1[i] * s2[i];
+                E_2 += w2[i] * s1[i];
+            }
+        } else {
+            for i in 0..2_usize.pow(m as u32) {
+                E_1 += w1[i] * s2[i];
+                E_2 += w2[i] * s1[i];
+            }
         }
         Self {x:(C, D_1, D_2), E:(E_1.into_affine(), E_2.into_affine())}
     }
@@ -45,8 +52,8 @@ pub struct DoryProof{
 }
 #[allow(non_snake_case)]
 impl DoryProof {
-    pub fn generate(witness1: &Vec<G1>, witness2: &Vec<G2>, scalar1: &Vec<Fr>, scalar2: &Vec<Fr>,
-            setup: &DoryPrecomputation, statement: &DoryStatement) -> Self{
+    pub fn generate(witness1: &Vec<G1Affine>, witness2: &Vec<G2Affine>, scalar1: &Vec<Fr>, scalar2: &Vec<Fr>,
+            setup: &DoryPrecomputation, statement: &DoryStatement) -> Self {
         assert_eq!(witness1.len(), witness2.len());
         let m = setup.m;
         let mut D = Vec::<(Gt, Gt, Gt, Gt)>::with_capacity(m);
@@ -104,6 +111,7 @@ impl DoryProof {
 
             let alpha: Fr = DoryOracle::fromGts(&[c_positive, c_negative]);
             let alpha_inv = alpha.inverse().unwrap();
+            //MSM in this library seems to have some problems, so we use common group mul and add ops.
             for k in 0..half {
                 v1[k] = (v1[k] * alpha + v1[k + half]).into();
                 v2[k] = (v2[k] * alpha_inv + v2[k + half]).into();
@@ -119,7 +127,7 @@ impl DoryProof {
             E_2 += G2::msm(&[e_2_beta.into_affine(), e_2_positive.into_affine(), e_2_negative.into_affine()], &[beta_inv, alpha, alpha_inv]).unwrap();
         }
 
-        Self {D, C, m, E_beta, E, v_fin: (v1[0].into_affine(), v2[0].into_affine()), s_fin: (s1[0], s2[0])}
+        Self {D, C, m, E_beta, E, v_fin: (v1[0], v2[0]), s_fin: (s1[0], s2[0])}
     }
 
     pub fn verify(state: &DoryStatement, setup: &DoryPrecomputation, proof: &DoryProof) -> bool{
@@ -187,10 +195,7 @@ pub struct DoryPrecomputation {
 }
 #[allow(non_snake_case)]
 impl DoryPrecomputation {
-    pub fn generate_from_qap(qap: &ConstraintSystem) -> Self{
-        //get round times
-        let (_, n, _) = qap.get_size();
-
+    pub fn generate_with_size(n: usize) -> Self{
         //m = log(n)
         let m = ark_std::log2(n) as usize;
 

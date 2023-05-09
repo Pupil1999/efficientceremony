@@ -59,9 +59,6 @@ impl ConstraintSystem {
     }
 
     pub fn get_size(&self) -> (usize, usize, usize) {
-        let m = self.m;
-        let n = self.n;
-        let l = self.l;
-        (m, n, l)
+        (self.m, self.n, self.l)
     }
 }
